@@ -1,0 +1,191 @@
+import mysql.connector
+from datetime import datetime, date, time, timedelta
+
+# data base connection
+def get_connection():
+    print("🔌 Attempting DB connection...")
+    conn = mysql.connector.connect(
+        host="localhost",
+        user="root",
+        password="lucky@23",
+        database="attendence_portal"
+    )
+    print("✅ DB connection successful")
+    return conn
+
+
+def authenticate(email, password):
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    query = "SELECT email FROM employee WHERE email=%s AND password=%s"
+    cursor.execute(query, (email, password))
+    user = cursor.fetchone()
+
+    conn.close()
+    return user is not None
+
+# login 
+def log_in():
+    email = input("Enter email: ")
+    password = input("Enter password: ")
+
+    if not authenticate(email, password):
+        print("❌ Invalid email or password")
+        return
+
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    today = date.today()
+    login_time = datetime.now().time()
+
+    # Prevent duplicate login
+    cursor.execute("""
+        SELECT * FROM attendance
+        WHERE email=%s AND attendance_date=%s
+    """, (email, today))
+
+    if cursor.fetchone():
+        print("⚠️ Already logged in today")
+    else:
+        cursor.execute("""
+            INSERT INTO attendance (email, attendance_date, login_time)
+            VALUES (%s, %s, %s)
+        """, (email, today, login_time))
+        conn.commit()
+        
+        print("✅ Login successful")
+
+    conn.close()
+
+from datetime import datetime, date, time, timedelta
+
+def logout():
+    email = input("Enter email: ")
+    password = input("Enter password: ")
+
+    if not authenticate(email, password):
+        print("❌ Invalid credentials")
+        return
+
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    cursor.execute("""
+        SELECT login_time FROM attendance
+        WHERE email=%s AND attendance_date=CURDATE()
+    """, (email,))
+
+    row = cursor.fetchone()
+    if not row:
+        print("❌ No login found today")
+        conn.close()
+        return
+
+    login_time = row[0]
+
+    # ✅ FIX: Convert timedelta → time
+    if isinstance(login_time, timedelta):
+        total_seconds = int(login_time.total_seconds())
+        login_time = time(
+            total_seconds // 3600,
+            (total_seconds % 3600) // 60,
+            total_seconds % 60
+        )
+
+    logout_time = datetime.now().time()
+
+    login_dt = datetime.combine(date.today(), login_time)
+    logout_dt = datetime.combine(date.today(), logout_time)
+
+    work_hours = round((logout_dt - login_dt).seconds / 3600, 2)
+    status = "Present" if work_hours >= 8 else "Underworked"
+
+    cursor.execute("""
+        UPDATE attendance
+        SET logout_time=%s, work_hours=%s, status=%s
+        WHERE email=%s AND attendance_date=CURDATE()
+    """, (logout_time, work_hours, status, email))
+
+    conn.commit()
+    conn.close()
+
+    print(f"✅ Logout successful | Work Hours: {work_hours}")
+
+
+# autologout
+def auto_logout():
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    auto_time = time(19, 0, 0)  # 7:00 PM
+
+    cursor.execute("""
+        SELECT email, login_time
+        FROM attendance
+        WHERE attendance_date = CURDATE()
+        AND logout_time IS NULL
+    """)
+
+    rows = cursor.fetchall()
+
+    for email, login_time in rows:
+        login_dt = datetime.combine(datetime.today(), login_time)
+        logout_dt = datetime.combine(datetime.today(), auto_time)
+
+        work_hours = round((logout_dt - login_dt).seconds / 3600, 2)
+        status = "Present" if work_hours >= 8 else "Underworked"
+
+        cursor.execute("""
+            UPDATE attendance
+            SET logout_time=%s, work_hours=%s, status=%s
+            WHERE email=%s AND attendance_date=CURDATE()
+        """, (auto_time, work_hours, status, email))
+
+    conn.commit()
+    conn.close()
+    print("✅ Auto logout completed at 7 PM")
+
+# report
+def daily_report():
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    cursor.execute("""
+        SELECT email, login_time, logout_time, work_hours, status
+        FROM attendance
+        WHERE attendance_date = CURDATE()
+    """)
+
+    records = cursor.fetchall()
+
+    print("\n--- DAILY ATTENDANCE REPORT ---")
+    for row in records:
+        print(row)
+
+    conn.close()
+
+while True:
+    print("\n--- Employee Attendance System ---")
+    print("1. Login")
+    print("2. Logout")
+    print("3. Auto Logout (7 PM)")
+    print("4. Daily Report")
+    print("5. Exit")
+
+    choice = input("Enter choice: ")
+
+    if choice == "1":
+        log_in()
+    elif choice == "2":
+        logout()
+    elif choice == "3":
+        auto_logout()
+    elif choice == "4":
+        daily_report()
+    elif choice == "5":
+        print("👋 Exiting system")
+        break
+    else:
+        print("❌ Invalid choice")
